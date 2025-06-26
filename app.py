@@ -6,11 +6,94 @@ from dotenv import load_dotenv
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import CharacterTextSplitter
 from langchain_chroma import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 import gradio as gr
-
+from gradio.themes.utils import colors, fonts, sizes
+import time
+from gradio.themes.base import Base
+import logging
+# from __future__ import annotations
+from typing import Iterable
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 # Load environment variables (if any)
 load_dotenv()
+
+class Seafoam(Base):
+    def __init__(
+        self,
+        *,
+        primary_hue: colors.Color | str = colors.emerald,
+        secondary_hue: colors.Color | str = colors.blue,
+        neutral_hue: colors.Color | str = colors.slate,
+        spacing_size: sizes.Size | str = sizes.spacing_md,
+        radius_size: sizes.Size | str = sizes.radius_lg,
+        text_size: sizes.Size | str = sizes.text_lg,
+        font: fonts.Font
+        | str
+        | Iterable[fonts.Font | str] = (
+            fonts.GoogleFont("Inter"),
+            "ui-sans-serif",
+            "sans-serif",
+        ),
+        font_mono: fonts.Font
+        | str
+        | Iterable[fonts.Font | str] = (
+            fonts.GoogleFont("JetBrains Mono"),
+            "ui-monospace",
+            "monospace",
+        ),
+    ):
+        super().__init__(
+            primary_hue=primary_hue,
+            secondary_hue=secondary_hue,
+            neutral_hue=neutral_hue,
+            spacing_size=spacing_size,
+            radius_size=radius_size,
+            text_size=text_size,
+            font=font,
+            font_mono=font_mono,
+        )
+        super().set(
+            # Enhanced background with subtle gradient
+            body_background_fill="linear-gradient(135deg, #f0fdfa 0%, #3a3638 50%, #3a3638 100%)",
+            body_background_fill_dark="linear-gradient(135deg, #064e3b 0%, #0c4a6e 50%, #065f46 100%)",
+            
+            # Enhanced button styling - reduced padding
+            button_primary_background_fill="linear-gradient(135deg, *primary_500 0%, *secondary_600 100%)",
+            button_primary_background_fill_hover="linear-gradient(135deg, *primary_600 0%, *secondary_700 100%)",
+            button_primary_background_fill_dark="linear-gradient(135deg, *primary_600 0%, *secondary_700 100%)",
+            button_primary_text_color="white",
+            button_primary_shadow="*shadow_drop_lg",
+            button_large_padding="12px 24px",  # Reduced from 20px 40px
+            
+            # Block styling
+            block_background_fill="rgba(30, 41, 59, 0.95)",
+            block_background_fill_dark="rgba(30, 41, 59, 0.95)",
+            block_border_width="1px",
+            block_border_color="rgba(16, 185, 129, 0.3)",
+            block_shadow="*shadow_drop_lg",
+            block_title_text_weight="700",
+            block_title_text_color="#34d399",
+            block_title_text_color_dark="#34d399",
+            
+            # Input styling  
+            input_background_fill="rgba(30, 41, 59, 0.9)",
+            input_background_fill_dark="rgba(30, 41, 59, 0.9)",
+            input_border_width="1px",
+            input_shadow="*shadow_drop",
+            input_shadow_focus="*shadow_drop_lg",
+            
+            # Slider improvements
+            slider_color="*primary_500",
+            slider_color_dark="*primary_400",
+            
+            # Panel styling
+            panel_background_fill="rgba(30, 41, 59, 0.95)",
+            panel_background_fill_dark="rgba(30, 41, 59, 0.95)",
+        )
+
+seafoam = Seafoam()
 
 # --- 1. Load your book metadata ---
 books = pd.read_csv("books_with_emotions.csv")
@@ -22,15 +105,28 @@ books["large_thumbnail"] = np.where(
 )
 
 # --- 2. Build embeddings DB ---
-raw_docs = TextLoader("tagged_description.txt", encoding="utf-8").load()
-splitter = CharacterTextSplitter(separator="\n", chunk_size=0, chunk_overlap=0)
-documents = splitter.split_documents(raw_docs)
-
 embedding_model = HuggingFaceEmbeddings(
-    model_name="BAAI/bge-large-en-v1.5",
-    model_kwargs={"device": "cuda"},
+    model_name="BAAI/bge-base-en-v1.5",
+    model_kwargs={"device": "cpu"},  # Use CPU for Hugging Face Spaces
 )
-db_books = Chroma.from_documents(documents, embedding_model)
+PERSIST_DIR = "chroma_db"
+if os.path.exists(PERSIST_DIR):
+    logger.info(f"Loading existing Chroma DB from {PERSIST_DIR}...")
+    db_books = Chroma(
+        persist_directory=PERSIST_DIR,
+        embedding_function=embedding_model
+    )
+else:
+    logger.info(f"Creating new Chroma DB in {PERSIST_DIR}...")
+    raw_docs = TextLoader("tagged_description.txt", encoding="utf-8").load()
+    splitter = CharacterTextSplitter(separator="\n", chunk_size=300, chunk_overlap=0)
+    documents = splitter.split_documents(raw_docs)
+    db_books = Chroma.from_documents(
+        documents,
+        embedding_model,
+        persist_directory=PERSIST_DIR
+    )
+    db_books.persist()
 
 # --- 3. Recommendation logic ---
 def retrieve_semantic_recommendations(
@@ -88,19 +184,117 @@ def recommend_books(query: str, category: str, tone: str):
 categories = ["All"] + sorted(books["simple_categories"].dropna().unique().tolist())
 tones      = ["All", "Happy", "Surprising", "Angry", "Suspenseful", "Sad"]
 
-with gr.Blocks(theme=gr.themes.Glass()) as dashboard:
+with gr.Blocks(theme=seafoam, title="Book Recommender", css="""
+    /* Additional custom CSS for enhanced styling */
+    .gradio-container {
+        background: linear-gradient(135deg, #3a3638 0%, #3a3638 50%, #3a3638 100%) !important;
+        min-height: 100vh;
+    }
+    
+    /* Enhanced input focus effects */
+    .gr-textbox:focus-within,
+    .gr-dropdown:focus-within {
+        transform: translateY(-2px);
+        transition: all 0.3s ease;
+    }
+    
+    /* Button hover animations and width control */
+    .gr-button:hover {
+        transform: translateY(-2px);
+        transition: all 0.3s ease;
+    }
+    
+    /* Control button width to fit text on one line */
+    .gr-button {
+        width: auto !important;
+        min-width: fit-content !important;
+        max-width: 250px !important;
+        white-space: nowrap !important;
+        text-overflow: ellipsis !important;
+        overflow: hidden !important;
+    }
+    
+    /* Gallery card styling */
+    .gr-gallery .grid-item {
+        border-radius: 12px !important;
+        overflow: hidden;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        transition: all 0.3s ease;
+    }
+    
+    .gr-gallery .grid-item:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    }
+    
+    /* Title styling */
+    .gr-markdown h1 {
+        background: linear-gradient(135deg, #059669 0%, #0284c7 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        text-align: center;
+        font-weight: 800;
+        font-size: 2.5rem;
+        margin-bottom: 2rem;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    /* Subtle animations */
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .gr-block {
+        animation: fadeIn 0.6s ease-out;
+    }
+""") as dashboard:
     gr.Markdown("# 📚 Semantic Book Recommender")
     with gr.Row():
-        q_in = gr.Textbox(label="Describe a book you'd like")
-        cat = gr.Dropdown(choices=categories, value="All", label="Category")
-        tone = gr.Dropdown(choices=tones, value="All", label="Tone")
+        q_in = gr.Textbox(
+            label="Describe a book you'd like", 
+            placeholder="e.g., 'a thrilling mystery novel' or 'a heartwarming romance'",
+            container=True,
+            scale=3
+        )
+        cat = gr.Dropdown(
+            choices=categories, 
+            value="All", 
+            label="Category",
+            container=True,
+            scale=1
+        )
+        tone = gr.Dropdown(
+            choices=tones, 
+            value="All", 
+            label="Tone",
+            container=True,
+            scale=1
+        )
+    
+    # Center the button and reduce its width
+    with gr.Row():
+        with gr.Column(scale=1):
+            pass  # Empty column for spacing
+        with gr.Column(scale=1):
+            btn = gr.Button(
+                "🔍 Search for Books", 
+                variant="primary", 
+                size="lg"
+            )
+        with gr.Column(scale=1):
+            pass  # Empty column for spacing
+    
     gallery = gr.Gallery(
-        label="Recommendations",
+        label="📖 Your Personalized Recommendations",
         columns=4,
         object_fit="contain",
-        preview=True
+        preview=True,
+        container=True,
+        height="auto"
     )
-    btn = gr.Button("Search")
+    
     btn.click(
         fn=recommend_books,
         inputs=[q_in, cat, tone],
