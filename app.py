@@ -2,305 +2,563 @@ import os
 import pandas as pd
 import numpy as np
 from dotenv import load_dotenv
-
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import CharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 import gradio as gr
-from gradio.themes.utils import colors, fonts, sizes
-import time
 from gradio.themes.base import Base
 import logging
-# from __future__ import annotations
-from typing import Iterable
+import base64
+
+# --- Setup ---
+load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-# Load environment variables (if any)
-load_dotenv()
 
-class Seafoam(Base):
-    def __init__(
-        self,
-        *,
-        primary_hue: colors.Color | str = colors.emerald,
-        secondary_hue: colors.Color | str = colors.blue,
-        neutral_hue: colors.Color | str = colors.slate,
-        spacing_size: sizes.Size | str = sizes.spacing_md,
-        radius_size: sizes.Size | str = sizes.radius_lg,
-        text_size: sizes.Size | str = sizes.text_lg,
-        font: fonts.Font
-        | str
-        | Iterable[fonts.Font | str] = (
-            fonts.GoogleFont("Inter"),
-            "ui-sans-serif",
-            "sans-serif",
-        ),
-        font_mono: fonts.Font
-        | str
-        | Iterable[fonts.Font | str] = (
-            fonts.GoogleFont("JetBrains Mono"),
-            "ui-monospace",
-            "monospace",
-        ),
-    ):
-        super().__init__(
-            primary_hue=primary_hue,
-            secondary_hue=secondary_hue,
-            neutral_hue=neutral_hue,
-            spacing_size=spacing_size,
-            radius_size=radius_size,
-            text_size=text_size,
-            font=font,
-            font_mono=font_mono,
-        )
-        super().set(
-            # Enhanced background with subtle gradient
-            body_background_fill="linear-gradient(135deg, #f0fdfa 0%, #3a3638 50%, #3a3638 100%)",
-            body_background_fill_dark="linear-gradient(135deg, #064e3b 0%, #0c4a6e 50%, #065f46 100%)",
-            
-            # Enhanced button styling - reduced padding
-            button_primary_background_fill="linear-gradient(135deg, *primary_500 0%, *secondary_600 100%)",
-            button_primary_background_fill_hover="linear-gradient(135deg, *primary_600 0%, *secondary_700 100%)",
-            button_primary_background_fill_dark="linear-gradient(135deg, *primary_600 0%, *secondary_700 100%)",
-            button_primary_text_color="white",
-            button_primary_shadow="*shadow_drop_lg",
-            button_large_padding="12px 24px",  # Reduced from 20px 40px
-            
-            # Block styling
-            block_background_fill="rgba(30, 41, 59, 0.95)",
-            block_background_fill_dark="rgba(30, 41, 59, 0.95)",
-            block_border_width="1px",
-            block_border_color="rgba(16, 185, 129, 0.3)",
-            block_shadow="*shadow_drop_lg",
-            block_title_text_weight="700",
-            block_title_text_color="#34d399",
-            block_title_text_color_dark="#34d399",
-            
-            # Input styling  
-            input_background_fill="rgba(30, 41, 59, 0.9)",
-            input_background_fill_dark="rgba(30, 41, 59, 0.9)",
-            input_border_width="1px",
-            input_shadow="*shadow_drop",
-            input_shadow_focus="*shadow_drop_lg",
-            
-            # Slider improvements
-            slider_color="*primary_500",
-            slider_color_dark="*primary_400",
-            
-            # Panel styling
-            panel_background_fill="rgba(30, 41, 59, 0.95)",
-            panel_background_fill_dark="rgba(30, 41, 59, 0.95)",
-        )
-
-seafoam = Seafoam()
-
-# --- 1. Load your book metadata ---
+# --- Load Data ---
 books = pd.read_csv("books_with_emotions.csv")
 books["large_thumbnail"] = books["thumbnail"].astype(str) + "&fife=w800"
 books["large_thumbnail"] = np.where(
     books["large_thumbnail"].str.contains("nan"),
-    "cover-not-found.jpg",
-    books["large_thumbnail"],
+    "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIwIiBoZWlnaHQ9IjE4MCIgdmlld0JveD0iMCAwIDEyMCAxODAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iMTgwIiBmaWxsPSIjMzMzIiBzdHJva2U9IiM2NjYiIHN0cm9rZS13aWR0aD0iMiIvPgo8dGV4dCB4PSI2MCIgeT0iOTAiIGZpbGw9IndoaXRlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iMTQiPk5vIENvdmVyPC90ZXh0Pgo8L3N2Zz4=",
+    books["large_thumbnail"]
 )
 
-# --- 2. Build embeddings DB ---
-embedding_model = HuggingFaceEmbeddings(
-    model_name="BAAI/bge-base-en-v1.5",
-    model_kwargs={"device": "cpu"},  # Use CPU for Hugging Face Spaces
-)
+# --- Vector DB ---
+embedding_model = HuggingFaceEmbeddings(model_name="BAAI/bge-base-en-v1.5", model_kwargs={"device": "cpu"})
 PERSIST_DIR = "chroma_db"
+
 if os.path.exists(PERSIST_DIR):
-    logger.info(f"Loading existing Chroma DB from {PERSIST_DIR}...")
-    db_books = Chroma(
-        persist_directory=PERSIST_DIR,
-        embedding_function=embedding_model
-    )
+    db_books = Chroma(persist_directory=PERSIST_DIR, embedding_function=embedding_model)
 else:
-    logger.info(f"Creating new Chroma DB in {PERSIST_DIR}...")
     raw_docs = TextLoader("tagged_description.txt", encoding="utf-8").load()
     splitter = CharacterTextSplitter(separator="\n", chunk_size=300, chunk_overlap=0)
     documents = splitter.split_documents(raw_docs)
-    db_books = Chroma.from_documents(
-        documents,
-        embedding_model,
-        persist_directory=PERSIST_DIR
-    )
+    db_books = Chroma.from_documents(documents, embedding_model, persist_directory=PERSIST_DIR)
     db_books.persist()
 
-# --- 3. Recommendation logic ---
-def retrieve_semantic_recommendations(
-    query: str,
-    category: str = None,
-    tone: str = None,
-    initial_top_k: int = 50,
-    final_top_k: int = 16,
-) -> pd.DataFrame:
+# --- Recommender ---
+def retrieve_semantic_recommendations(query, category=None, tone=None, initial_top_k=50, final_top_k=16):
     recs = db_books.similarity_search(query, k=initial_top_k)
     isbns = [int(r.page_content.strip('"').split()[0]) for r in recs]
     df = books[books["isbn13"].isin(isbns)].head(initial_top_k)
 
     if category and category != "All":
         df = df[df["simple_categories"] == category].head(final_top_k)
-    else:
-        df = df.head(final_top_k)
 
     tone_map = {
-        "Happy":      "joy",
+        "Light & Fun": "joy",
         "Surprising": "surprise",
-        "Angry":      "anger",
-        "Suspenseful":"fear",
-        "Sad":        "sadness",
+        "Dark & Intense": "anger",
+        "Suspenseful": "fear",
+        "Emotional": "sadness",
     }
     if tone in tone_map:
         df = df.sort_values(by=tone_map[tone], ascending=False).head(final_top_k)
     return df
 
-def recommend_books(query: str, category: str, tone: str):
+def recommend_books(query, category, tone):
     df = retrieve_semantic_recommendations(query, category, tone)
-    gallery_results = []
+    if df.empty:
+        return """
+        <div class='empty-state'>
+            <h3>📚 No books found</h3>
+            <p>Try a different description or filter to discover your next great read.</p>
+        </div>
+        """
+
+    cards_html = "<div class='books-grid'>"
     for _, row in df.iterrows():
-        img = row["large_thumbnail"] or "cover-not-found.jpg"
+        img = row["large_thumbnail"] or "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIwIiBoZWlnaHQ9IjE4MCIgdmlld0JveD0iMCAwIDEyMCAxODAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iMTgwIiBmaWxsPSIjMzMzIiBzdHJva2U9IiM2NjYiIHN0cm9rZS13aWR0aD0iMiIvPgo8dGV4dCB4PSI2MCIgeT0iOTAiIGZpbGw9IndoaXRlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iMTQiPk5vIENvdmVyPC90ZXh0Pgo8L3N2Zz4="
         title = row["title"] or "Unknown Title"
         authors = row["authors"] or "Unknown Author"
         desc = row["description"] or ""
-        # Format authors
+        truncated_desc = " ".join(desc.split()[:25]) + "..." if len(desc.split()) > 25 else desc
+
         if ";" in authors:
             parts = [a.strip() for a in authors.split(";")]
-            if len(parts) == 2:
-                authors_str = f"{parts[0]} and {parts[1]}"
-            else:
-                authors_str = ", ".join(parts[:-1]) + ", and " + parts[-1]
+            authors_str = f"{parts[0]} and {parts[1]}" if len(parts) == 2 else ", ".join(parts[:-1]) + ", and " + parts[-1]
         else:
             authors_str = authors
-        # Truncate description
-        truncated = " ".join(desc.split()[:30]) + "..."
-        caption = f"{title} by {authors_str}: {truncated}"
-        # **Return as [image, caption] lists**
-        gallery_results.append([img, caption])
-    return gallery_results
 
-# --- 4. Gradio UI ---
+        cards_html += f"""
+        <div class='book-card'>
+            <div class='book-cover'>
+                <img src='{img}' alt='{title}' loading='lazy'>
+            </div>
+            <div class='book-title'>{title}</div>
+            <div class='book-author'>{authors_str}</div>
+            <div class='book-description'>{truncated_desc}</div>
+        </div>
+        """
+    cards_html += "</div>"
+    return cards_html
+
+# --- Custom CSS (adapted from HTML design) ---
+custom_css = """
+/* Import Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Text:wght@400;600;700&display=swap');
+
+/* Global styling */
+.gradio-container {
+    font-family: 'Crimson Text', Georgia, serif !important;
+    background: linear-gradient(135deg, #2c1810 0%, #4a3426 50%, #3d2b1f 100%) !important;
+    color: #f4e4c1 !important;
+    min-height: 100vh;
+    position: relative;
+    overflow-x: hidden;
+}
+
+/* Background overlay */
+.gradio-container::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: 
+        radial-gradient(circle at 20% 30%, rgba(255, 200, 100, 0.1) 0%, transparent 50%),
+        radial-gradient(circle at 80% 70%, rgba(255, 200, 100, 0.08) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* Main header */
+.main-header {
+    text-align: center;
+    margin-bottom: 20px;
+    position: relative;
+    z-index: 10;
+}
+
+.main-header h1 {
+    font-size: 2.5rem;
+    color: #d4af37;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 15px;
+}
+
+.main-header h1::before {
+    content: '📖';
+    font-size: 2.2rem;
+}
+
+/* Input section styling - REDUCED PADDING */
+.input-section {
+    background: linear-gradient(135deg, #1a4d3a 0%, #2d6b4a 100%) !important;
+    padding: 10px !important;
+    border-radius: 8px !important;
+    margin-bottom: 15px !important;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+    border: 2px solid #4a8b6b;
+    position: relative;
+    z-index: 10;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* Form inputs */
+.input-section label {
+    color: #f4e4c1 !important;
+    font-size: 0.9rem !important;
+    font-weight: 500 !important;
+    margin-bottom: 3px !important;
+}
+
+.input-section input,
+.input-section select {
+    background: rgba(26, 77, 58, 0.8) !important;
+    border: 2px solid #4a8b6b !important;
+    border-radius: 6px !important;
+    color: #f4e4c1 !important;
+    font-size: 0.9rem !important;
+    padding: 6px 8px !important;
+    transition: all 0.3s ease !important;
+    margin-bottom: 8px !important;
+}
+
+.input-section input:focus,
+.input-section select:focus {
+    border-color: #6db584 !important;
+    box-shadow: 0 0 10px rgba(109, 181, 132, 0.3) !important;
+}
+
+.input-section input::placeholder {
+    color: #a0a0a0 !important;
+    font-style: italic !important;
+}
+
+/* Search button - REDUCED SPACING */
+.search-button {
+    background: linear-gradient(135deg, #2d6b4a 0%, #3a8f5a 100%) !important;
+    color: white !important;
+    padding: 8px 16px !important;
+    border: none !important;
+    border-radius: 20px !important;
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+    cursor: pointer !important;
+    transition: all 0.3s ease !important;
+    margin: 8px auto !important;
+    display: block !important;
+    min-width: 140px !important;
+}
+
+.search-button:hover {
+    background: linear-gradient(135deg, #3a8f5a 0%, #4db36a 100%) !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 5px 15px rgba(58, 143, 90, 0.4) !important;
+}
+
+/* Results section */
+.results-section {
+    position: relative;
+    z-index: 10;
+    margin-top: 20px;
+}
+
+/* Books grid */
+.books-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 30px;
+    padding: 20px 0;
+}
+
+.book-card {
+    background: linear-gradient(135deg, #f4e4c1 0%, #e6d7b8 100%) !important;
+    border-radius: 15px;
+    padding: 20px;
+    text-align: center;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+    transition: all 0.3s ease;
+    border: 3px solid #d4af37;
+    animation: fadeInUp 0.6s ease both;
+}
+
+.book-card:hover {
+    transform: translateY(-10px);
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4);
+}
+
+.book-cover {
+    width: 180px;
+    height: 250px;
+    margin: 0 auto 20px;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+    position: relative;
+}
+
+.book-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.book-title {
+    font-size: 1.3rem;
+    font-weight: bold;
+    color: #2c1810;
+    margin-bottom: 8px;
+    font-style: italic;
+}
+
+.book-author {
+    font-size: 1.1rem;
+    color: #5d4037;
+    margin-bottom: 12px;
+    font-weight: 500;
+}
+
+.book-description {
+    font-size: 0.95rem;
+    color: #4a3426;
+    line-height: 1.4;
+    text-align: left;
+}
+
+/* Empty state */
+.empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    background: linear-gradient(135deg, #f4e4c1 0%, #e6d7b8 100%) !important;
+    border-radius: 15px;
+    border: 3px solid #d4af37;
+    margin: 20px 0;
+}
+
+.empty-state h3 {
+    color: #2c1810;
+    font-size: 1.5rem;
+    margin-bottom: 10px;
+}
+
+.empty-state p {
+    color: #4a3426;
+    font-size: 1.1rem;
+}
+
+/* Animations */
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .books-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .main-header h1 {
+        font-size: 2rem;
+    }
+    
+    .input-section {
+        padding: 8px !important;
+        max-width: 95%;
+    }
+}
+
+/* Override Gradio default styles */
+.gradio-container .wrap {
+    background: transparent !important;
+}
+
+.gradio-container .container {
+    max-width: 1200px !important;
+    margin: 0 auto !important;
+    padding: 20px !important;
+}
+
+/* Comprehensive Grey Background Overrides for Gradio */
+
+/* Override Gradio's default grey backgrounds */
+.gradio-container .block {
+    background: transparent !important;
+}
+
+.gradio-container .form {
+    background: transparent !important;
+}
+
+.gradio-container .panel {
+    background: transparent !important;
+}
+
+/* Target specific grey color values */
+[style*="#2B2B2B"], 
+[style*="#2b2b2b"], 
+[style*="rgb(43, 43, 43)"], 
+[style*="rgba(43, 43, 43"],
+[style*="#1f2937"],
+[style*="#374151"],
+[style*="#4b5563"],
+[style*="#6b7280"],
+[style*="#9ca3af"] {
+    background: rgba(26, 77, 58, 0.8) !important;
+}
+
+/* Override common Gradio component backgrounds */
+.gradio-container .wrap,
+.gradio-container .container,
+.gradio-container .group,
+.gradio-container .block-container,
+.gradio-container .form-container {
+    background: transparent !important;
+}
+
+/* Input field backgrounds */
+.gradio-container input,
+.gradio-container select,
+.gradio-container textarea {
+    background: rgba(26, 77, 58, 0.8) !important;
+    border: 2px solid #4a8b6b !important;
+    color: #f4e4c1 !important;
+    padding: 6px 8px !important;
+    font-size: 0.9rem !important;
+}
+
+/* Button backgrounds */
+.gradio-container button {
+    background: linear-gradient(135deg, #2d6b4a 0%, #3a8f5a 100%) !important;
+    color: white !important;
+    border: none !important;
+}
+
+.gradio-container button:hover {
+    background: linear-gradient(135deg, #3a8f5a 0%, #4db36a 100%) !important;
+}
+
+/* Tab backgrounds */
+.gradio-container .tab-nav,
+.gradio-container .tabitem {
+    background: transparent !important;
+}
+
+/* Dropdown backgrounds */
+.gradio-container .dropdown {
+    background: rgba(26, 77, 58, 0.8) !important;
+}
+
+/* Dropdown options list - should have solid background for readability */
+.gradio-container .dropdown-menu,
+.gradio-container .dropdown-content,
+.gradio-container select option,
+.gradio-container .choices__list,
+.gradio-container .choices__item,
+.gradio-container [role="listbox"],
+.gradio-container [role="option"] {
+    background: #1a4d3a !important;
+    color: #f4e4c1 !important;
+    border: 1px solid #4a8b6b !important;
+}
+
+/* Dropdown option hover states */
+.gradio-container .dropdown-menu li:hover,
+.gradio-container .dropdown-content li:hover,
+.gradio-container select option:hover,
+.gradio-container .choices__item:hover,
+.gradio-container [role="option"]:hover {
+    background: #2d6b4a !important;
+    color: #ffffff !important;
+}
+
+/* Modal and popup backgrounds */
+.gradio-container .modal,
+.gradio-container .popup {
+    background: rgba(26, 77, 58, 0.95) !important;
+}
+
+/* Accordion backgrounds */
+.gradio-container .accordion {
+    background: transparent !important;
+}
+
+/* Progress bar backgrounds */
+.gradio-container .progress {
+    background: rgba(26, 77, 58, 0.8) !important;
+}
+
+/* Radio and checkbox backgrounds */
+.gradio-container .radio,
+.gradio-container .checkbox {
+    background: transparent !important;
+}
+
+/* Slider backgrounds */
+.gradio-container .slider {
+    background: rgba(26, 77, 58, 0.8) !important;
+}
+
+/* File upload backgrounds */
+.gradio-container .file-upload {
+    background: rgba(26, 77, 58, 0.8) !important;
+    border: 2px dashed #4a8b6b !important;
+}
+
+/* Error message backgrounds */
+.gradio-container .error {
+    background: rgba(139, 69, 19, 0.8) !important;
+    color: #f4e4c1 !important;
+}
+
+/* Success message backgrounds */
+.gradio-container .success {
+    background: rgba(26, 77, 58, 0.8) !important;
+    color: #f4e4c1 !important;
+}
+
+/* Additional fallback overrides */
+.gradio-container [class*="bg-gray"],
+.gradio-container [class*="bg-grey"],
+.gradio-container [class*="bg-slate"],
+.gradio-container [class*="bg-zinc"] {
+    background: rgba(26, 77, 58, 0.8) !important;
+}
+
+/* Override any remaining grey backgrounds with important declarations */
+.gradio-container * {
+    background-color: transparent !important;
+}
+
+/* Re-apply your custom backgrounds with higher specificity */
+.gradio-container .input-section {
+    background: linear-gradient(135deg, #1a4d3a 0%, #2d6b4a 100%) !important;
+}
+
+.gradio-container .book-card {
+    background: linear-gradient(135deg, #f4e4c1 0%, #e6d7b8 100%) !important;
+}
+
+.gradio-container .empty-state {
+    background: linear-gradient(135deg, #f4e4c1 0%, #e6d7b8 100%) !important;
+}
+
+/* Ensure main container background is preserved */
+.gradio-container {
+    background: linear-gradient(135deg, #2c1810 0%, #4a3426 50%, #3d2b1f 100%) !important;
+}
+"""
+
+# --- UI ---
 categories = ["All"] + sorted(books["simple_categories"].dropna().unique().tolist())
-tones      = ["All", "Happy", "Surprising", "Angry", "Suspenseful", "Sad"]
+tones = ["All", "Light & Fun", "Surprising", "Dark & Intense", "Suspenseful", "Emotional"]
 
-with gr.Blocks(theme=seafoam, title="Book Recommender", css="""
-    /* Additional custom CSS for enhanced styling */
-    .gradio-container {
-        background: linear-gradient(135deg, #3a3638 0%, #3a3638 50%, #3a3638 100%) !important;
-        min-height: 100vh;
-    }
-    
-    /* Enhanced input focus effects */
-    .gr-textbox:focus-within,
-    .gr-dropdown:focus-within {
-        transform: translateY(-2px);
-        transition: all 0.3s ease;
-    }
-    
-    /* Button hover animations and width control */
-    .gr-button:hover {
-        transform: translateY(-2px);
-        transition: all 0.3s ease;
-    }
-    
-    /* Control button width to fit text on one line */
-    .gr-button {
-        width: auto !important;
-        min-width: fit-content !important;
-        max-width: 250px !important;
-        white-space: nowrap !important;
-        text-overflow: ellipsis !important;
-        overflow: hidden !important;
-    }
-    
-    /* Gallery card styling */
-    .gr-gallery .grid-item {
-        border-radius: 12px !important;
-        overflow: hidden;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        transition: all 0.3s ease;
-    }
-    
-    .gr-gallery .grid-item:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-    }
-    
-    /* Title styling */
-    .gr-markdown h1 {
-        background: linear-gradient(135deg, #059669 0%, #0284c7 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        text-align: center;
-        font-weight: 800;
-        font-size: 2.5rem;
-        margin-bottom: 2rem;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
-    }
-    
-    /* Subtle animations */
-    @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(20px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    
-    .gr-block {
-        animation: fadeIn 0.6s ease-out;
-    }
-""") as dashboard:
-    gr.Markdown("# 📚 Semantic Book Recommender")
-    with gr.Row():
-        q_in = gr.Textbox(
-            label="Describe a book you'd like", 
-            placeholder="e.g., 'a thrilling mystery novel' or 'a heartwarming romance'",
-            container=True,
-            scale=3
+with gr.Blocks(css=custom_css, theme=Base(), title="Book Recommendation System") as dashboard:
+    gr.HTML("""
+        <div class='main-header'>
+            <h1>Book Recommendation System</h1>
+        </div>
+    """)
+
+    with gr.Column(elem_classes=["input-section"]):
+        description_input = gr.Textbox(
+            label="Describe a book you'd like",
+            placeholder="e.g., 'a mystery with unreliable narrator' or 'fantasy with strong female lead'",
+            lines=2,
+            elem_classes=["description-input"]
         )
-        cat = gr.Dropdown(
-            choices=categories, 
-            value="All", 
-            label="Category",
-            container=True,
-            scale=1
-        )
-        tone = gr.Dropdown(
-            choices=tones, 
-            value="All", 
-            label="Tone",
-            container=True,
-            scale=1
-        )
-    
-    # Center the button and reduce its width
-    with gr.Row():
-        with gr.Column(scale=1):
-            pass  # Empty column for spacing
-        with gr.Column(scale=1):
-            btn = gr.Button(
-                "🔍 Search for Books", 
-                variant="primary", 
-                size="lg"
+        with gr.Row():
+            category_dropdown = gr.Dropdown(
+                choices=categories,
+                value="All",
+                label="Genre",
+                elem_classes=["genre-dropdown"]
             )
-        with gr.Column(scale=1):
-            pass  # Empty column for spacing
-    
-    gallery = gr.Gallery(
-        label="📖 Your Personalized Recommendations",
-        columns=4,
-        object_fit="contain",
-        preview=True,
-        container=True,
-        height="auto"
-    )
-    
-    btn.click(
-        fn=recommend_books,
-        inputs=[q_in, cat, tone],
-        outputs=[gallery]
+            tone_dropdown = gr.Dropdown(
+                choices=tones,
+                value="All",
+                label="Reading Mood",
+                elem_classes=["mood-dropdown"]
+            )
+        search_button = gr.Button(
+            "🔍 Find Your Next Read",
+            elem_classes=["search-button"],
+            variant="primary"
+        )
+
+    results_display = gr.HTML("", elem_classes=["results-section"])
+
+    search_button.click(
+        fn=recommend_books, 
+        inputs=[description_input, category_dropdown, tone_dropdown], 
+        outputs=results_display
     )
 
-# --- 5. Launch ---
 if __name__ == "__main__":
     dashboard.launch()
