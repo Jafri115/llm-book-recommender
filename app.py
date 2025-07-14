@@ -76,7 +76,10 @@ def recommend_books(query, category, tone):
         desc = row["description"] or ""
         truncated_desc = " ".join(desc.split()[:25]) + "..." if len(desc.split()) > 25 else desc
 
-        if ";" in authors:
+        # Fix the TypeError: Check if authors is a string and not NaN
+        if pd.isna(authors) or not isinstance(authors, str):
+            authors_str = "Unknown Author"
+        elif ";" in authors:
             parts = [a.strip() for a in authors.split(";")]
             authors_str = f"{parts[0]} and {parts[1]}" if len(parts) == 2 else ", ".join(parts[:-1]) + ", and " + parts[-1]
         else:
@@ -95,35 +98,27 @@ def recommend_books(query, category, tone):
     cards_html += "</div>"
     return cards_html
 
-# --- Custom CSS (adapted from HTML design) ---
+# --- Custom CSS (Fixed background gradient) ---
 custom_css = """
 /* Import Google Fonts */
 @import url('https://fonts.googleapis.com/css2?family=Crimson+Text:wght@400;600;700&display=swap');
+@import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css');
 
 /* Global styling */
 .gradio-container {
     font-family: 'Crimson Text', Georgia, serif !important;
-    background: linear-gradient(135deg, #2c1810 0%, #4a3426 50%, #3d2b1f 100%) !important;
+    background: url('https://i.postimg.cc/XvDdDzBX/bg.png') !important;
+    background-size: cover !important;
+    background-position: center !important;
+    background-attachment: fixed !important;
+    background-repeat: no-repeat !important;
     color: #f4e4c1 !important;
     min-height: 100vh;
     position: relative;
     overflow-x: hidden;
 }
 
-/* Background overlay */
-.gradio-container::before {
-    content: '';
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: 
-        radial-gradient(circle at 20% 30%, rgba(255, 200, 100, 0.1) 0%, transparent 50%),
-        radial-gradient(circle at 80% 70%, rgba(255, 200, 100, 0.08) 0%, transparent 50%);
-    pointer-events: none;
-    z-index: 1;
-}
+/* Background overlay - REMOVED */
 
 /* Main header */
 .main-header {
@@ -143,19 +138,21 @@ custom_css = """
     gap: 15px;
 }
 
-.main-header h1::before {
-    content: '📖';
+.main-header h1 i {
     font-size: 2.2rem;
+    color: #d4af37;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
 }
+
 
 /* Input section styling - REDUCED PADDING */
 .input-section {
-    background: linear-gradient(135deg, #1a4d3a 0%, #2d6b4a 100%) !important;
-    padding: 10px !important;
+    background: #0F3D2D !important;
+    padding: 5px !important;
     border-radius: 8px !important;
     margin-bottom: 15px !important;
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
-    border: 2px solid #4a8b6b;
+    border: none solid #1D372A;
     position: relative;
     z-index: 10;
     max-width: 600px;
@@ -174,13 +171,13 @@ custom_css = """
 .input-section input,
 .input-section select {
     background: rgba(26, 77, 58, 0.8) !important;
-    border: 2px solid #4a8b6b !important;
+    border: 2px solid #1D372A !important;
     border-radius: 6px !important;
     color: #f4e4c1 !important;
     font-size: 0.9rem !important;
     padding: 6px 8px !important;
     transition: all 0.3s ease !important;
-    margin-bottom: 8px !important;
+    margin-bottom: 2px !important;
 }
 
 .input-section input:focus,
@@ -200,16 +197,35 @@ custom_css = """
     color: white !important;
     padding: 8px 16px !important;
     border: none !important;
-    border-radius: 20px !important;
+    border-radius: 12px !important;
     font-size: 0.9rem !important;
     font-weight: 600 !important;
     cursor: pointer !important;
     transition: all 0.3s ease !important;
     margin: 8px auto !important;
     display: block !important;
-    min-width: 140px !important;
+    min-width: unset !important;
+    width: auto !important;
+    padding: 8px 12px !important;
 }
-
+# .search-button {
+#     background: linear-gradient(90deg, #0f6a75, #1663b0); /* Blue gradient */
+#     color: white;
+#     padding: 10px 18px;
+#     border: none;
+#     border-radius: 12px;
+#     font-size: 1rem;
+#     font-weight: 600;
+#     cursor: pointer;
+#     display: inline-flex;
+#     align-items: center;
+#     gap: 8px; /* space between icon and text */
+#     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+#     transition: all 0.3s ease;
+#     min-width: unset !important;
+#     width: auto !important;
+#     padding: 8px 12px !important;
+# }
 .search-button:hover {
     background: linear-gradient(135deg, #3a8f5a 0%, #4db36a 100%) !important;
     transform: translateY(-2px) !important;
@@ -380,16 +396,18 @@ custom_css = """
 .gradio-container .block-container,
 .gradio-container .form-container {
     background: transparent !important;
+    padding: 0 !important;
+    border: none !important;
 }
 
 /* Input field backgrounds */
 .gradio-container input,
 .gradio-container select,
 .gradio-container textarea {
-    background: rgba(26, 77, 58, 0.8) !important;
-    border: 2px solid #4a8b6b !important;
+    background: #0F3D2D !important;
+    border: none solid #1D372A !important;
     color: #f4e4c1 !important;
-    padding: 6px 8px !important;
+    padding: 3px 8px !important;
     font-size: 0.9rem !important;
 }
 
@@ -425,7 +443,7 @@ custom_css = """
 .gradio-container [role="option"] {
     background: #1a4d3a !important;
     color: #f4e4c1 !important;
-    border: 1px solid #4a8b6b !important;
+    border: 0px solid #1D372A !important;
 }
 
 /* Dropdown option hover states */
@@ -468,7 +486,7 @@ custom_css = """
 /* File upload backgrounds */
 .gradio-container .file-upload {
     background: rgba(26, 77, 58, 0.8) !important;
-    border: 2px dashed #4a8b6b !important;
+    border: 0px dashed #1D372A !important;
 }
 
 /* Error message backgrounds */
@@ -498,7 +516,7 @@ custom_css = """
 
 /* Re-apply your custom backgrounds with higher specificity */
 .gradio-container .input-section {
-    background: linear-gradient(135deg, #1a4d3a 0%, #2d6b4a 100%) !important;
+    background: #0F3D2D !important;
 }
 
 .gradio-container .book-card {
@@ -509,9 +527,13 @@ custom_css = """
     background: linear-gradient(135deg, #f4e4c1 0%, #e6d7b8 100%) !important;
 }
 
-/* Ensure main container background is preserved */
+/* Ensure main container background is preserved - NO OVERLAYS */
 .gradio-container {
-    background: linear-gradient(135deg, #2c1810 0%, #4a3426 50%, #3d2b1f 100%) !important;
+    background: url('https://i.postimg.cc/XvDdDzBX/bg.png') !important;
+    background-size: cover !important;
+    background-position: center !important;
+    background-attachment: fixed !important;
+    background-repeat: no-repeat !important;
 }
 """
 
@@ -522,7 +544,7 @@ tones = ["All", "Light & Fun", "Surprising", "Dark & Intense", "Suspenseful", "E
 with gr.Blocks(css=custom_css, theme=Base(), title="Book Recommendation System") as dashboard:
     gr.HTML("""
         <div class='main-header'>
-            <h1>Book Recommendation System</h1>
+            <h1><i class="fas fa-book-open"></i> Book Recommendation System</h1>
         </div>
     """)
 
@@ -561,4 +583,4 @@ with gr.Blocks(css=custom_css, theme=Base(), title="Book Recommendation System")
     )
 
 if __name__ == "__main__":
-    dashboard.launch()
+    dashboard.launch()  
